@@ -37,7 +37,8 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
 
       if (area > 200000) { // Apply grid splitting for large areas
         const bbox = turf.bbox(thePolygon);
-        const cellSide = area > 1000000 ? 75.0 : 30.0;
+        // Calculate the number of cells based on the area, 
+        const cellSide = area > 1000000 ? 100.0 : 10.0;
         const squareGrid = turf.squareGrid(bbox, cellSide, { units: "kilometers" });
 
         squareGrid.features.forEach(cell => {
