@@ -56,9 +56,9 @@ class World {
     );
   }
 
-  async fetchGeoJson(relativePath) {
+  async fetchGeoJson(countryCca2) {
     try {
-      const response = await fetch(relativePath);
+      const response = await fetch(`/assets/country/${countryCca2}.json`);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -70,8 +70,8 @@ class World {
   }
 
   async showCountry(countryCca2, style, meshMethod) {
-    const geoJsonPath = `./src/world/assets/country/${countryCca2}.json`;
-    const geoJsonData = await this.fetchGeoJson(geoJsonPath);
+
+    const geoJsonData = await this.fetchGeoJson(countryCca2);
 
     removePreviousGeometries(this.earth);
 
