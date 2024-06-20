@@ -8,17 +8,17 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourusername/your-world-module-name.git"
+    "url": "git+https://github.com/Yangyang-X/three-earth.git"
   },
   "keywords": [
     "world",
     "module",
     "npm"
   ],
-  "author": "Your Name",
+  "author": "Yangyang",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/yourusername/your-world-module-name/issues"
+    "url": "https://github.com/Yangyang-X/three-earth/issues"
   },
-  "homepage": "https://github.com/yourusername/your-world-module-name#readme"
+  "homepage": "https://github.com/Yangyang-X/three-earth#readme"
 }
