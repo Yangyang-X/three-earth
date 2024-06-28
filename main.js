@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import * as turf from "@turf/turf";
 import { createEarth } from './components/earth.js';
 import { createCamera } from "./components/camera.js";
 import { createScene } from "./components/scene.js"
@@ -9,7 +10,7 @@ import { Resizer } from "./systems/resizer.js";
 import {
   highlightPolygons,
   removePreviousGeometries,
-} from "./systems/highlightRegion.js";
+} from "./utils/highlighter.js";
 import {
   calculatePolygonCentroid,
   latLngTo3DPosition,
@@ -56,26 +57,38 @@ class World {
     );
   }
 
-  showCountry(geoJsonData, style, meshMethod) {
+  showCountry(name, geoJsonData, style, meshMethod) {
     if (!geoJsonData) {
       console.error("No GeoJSON data provided");
       return;
     }
-
+  
     removePreviousGeometries(this.earth);
-
+  
     setTimeout(() => {
       this.earth.scale.set(1, 1, 1);
       const firstFeature = geoJsonData.features[0];
       const centroid = calculatePolygonCentroid(firstFeature.geometry);
-      geoJsonData['meshMethod'] = meshMethod
+      geoJsonData['meshMethod'] = meshMethod;
       const targetLatLng = { lat: centroid.lat, lng: centroid.lng };
-
-      this.rotateGlobeTo(targetLatLng, () => {
-        highlightPolygons(geoJsonData, this.earth, this.earthRadius, style);
-      });
+  
+      // Calculate the area of the country
+      const area = turf.area(turf.feature(firstFeature.geometry)) / 1000000; // Area in square kilometers
+  
+      if (area > 1000000) { // Large country
+        // Highlight polygons immediately
+        highlightPolygons(name, geoJsonData, this.earth, this.earthRadius, style);
+        // Rotate the globe
+        this.rotateGlobeTo(targetLatLng);
+      } else { // Small country
+        // Rotate the globe and highlight polygons after rotation is complete
+        this.rotateGlobeTo(targetLatLng, () => {
+          highlightPolygons(name, geoJsonData, this.earth, this.earthRadius, style);
+        });
+      }
     }, 200);
   }
+  
 
   rotateGlobeTo(targetLatLng, onComplete) {
     const initialLatLng = this.previousTargetLatLng;

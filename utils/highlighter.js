@@ -1,25 +1,137 @@
 import * as THREE from "three";
 import * as turf from "@turf/turf";
 import earcut from "earcut";
-import { latLngTo3DPosition } from "../utils/geoUtils.js";
+import { openDB } from "idb";
+import { latLngTo3DPosition } from "./geoUtils.js";
 
 // Constants for default values
 const DEFAULT_RADIUS = 100;
 const DEFAULT_COLOR = "red";
 
 var previousGeometries = [];
+var polygonCache = {};
 
-async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
+// Save polygons to the cache
+function savePolygonsToCache(key, data) {
+  polygonCache[key] = data;
+}
+
+// Get polygons from the cache
+function getPolygonsFromCache(key) {
+  return polygonCache[key] || null;
+}
+
+// Convert polygons to storable data
+function convertPolygonsToData(polygons) {
+  return polygons.map((polygon) => ({
+    coordinates: polygon.geometry.coordinates,
+    properties: polygon.properties,
+  }));
+}
+
+// Recreate polygons from stored data
+function recreatePolygons(polygonData) {
+  return polygonData.map((data) =>
+    turf.polygon(data.coordinates, data.properties)
+  );
+}
+
+async function openDatabase() {
+  return openDB("meshData", 1, {
+    upgrade(db) {
+      if (!db.objectStoreNames.contains("meshData")) {
+        db.createObjectStore("meshData", { keyPath: "key" });
+      }
+    },
+  });
+}
+
+function serializeMesh(mesh) {
+  if (!mesh.geometry || !mesh.material) {
+    throw new Error("Mesh geometry or material is undefined");
+  }
+
+  return {
+    geometry: mesh.geometry.toJSON(),
+    material: mesh.material.toJSON(),
+    position: mesh.position.toArray(),
+    rotation: mesh.rotation.toArray(),
+    scale: mesh.scale.toArray(),
+  };
+}
+
+function deserializeMesh(data) {
+  const geometryLoader = new THREE.BufferGeometryLoader();
+  const materialLoader = new THREE.MaterialLoader();
+
+  const mesh = new THREE.Mesh(
+    geometryLoader.parse(data.geometry),
+    materialLoader.parse(data.material)
+  );
+
+  mesh.position.fromArray(data.position);
+  mesh.rotation.fromArray(data.rotation);
+  mesh.scale.fromArray(data.scale);
+
+  return mesh;
+}
+
+async function saveMeshData(key, meshes) {
+  const db = await openDatabase();
+  const tx = db.transaction("meshData", "readwrite");
+  const store = tx.objectStore("meshData");
+  const serializedMeshes = meshes.map((mesh) => serializeMesh(mesh)); // Ensure this handles an array
+  await store.put({ key, value: serializedMeshes });
+  await tx.complete;
+  console.log("Saved meshes to database for:", key);
+}
+
+async function loadMeshData(key) {
+  console.log("Load... mesh data for:", key);
+  const db = await openDatabase();
+  const tx = db.transaction("meshData", "readonly");
+  const store = tx.objectStore("meshData");
+  const result = await store.get(key);
+
+  if (result && Array.isArray(result.value)) {
+    const meshes = result.value.map((serializedMesh) =>
+      deserializeMesh(serializedMesh)
+    );
+    console.log(`${new Date().toISOString()}: Meshes loaded for ${key}`);
+
+    return meshes;
+  } else {
+    console.error(
+      "Mesh data for key",
+      key,
+      "is not properly formatted or is missing."
+    );
+    return null;
+  }
+}
+
+async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
   if (!geoJson || !geoJson.features) {
     console.error("Invalid GeoJSON data:", geoJson);
     return [];
   }
 
-  const meshes = [];
+  let meshes = [];
+  const meshMethod = geoJson['meshMethod'];
 
+  // Attempt to load precomputed meshes from the database
+  if (["ru", "us", "ca", 'cn', 'br'].includes(name)) {
+    const data = await loadMeshData(name);
+    if (data) {
+      console.log("Meshed data loaded from database:", name);
+      return data;
+    }
+  }
+
+  // Process each feature in the GeoJSON
   for (const feature of geoJson.features) {
     if (!feature.geometry || !feature.geometry.coordinates) {
-      console.error("Feature does not have a valid geometry:", feature);
+      console.error(`Feature does not have a valid geometry:`, feature);
       continue;
     }
 
@@ -31,43 +143,91 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
       continue;
     }
 
-    polygons.forEach(polygonCoords => {
-      const thePolygon = turf.polygon(polygonCoords);
-      const area = turf.area(thePolygon) / 1000000; // Convert area to square kilometers
+    // Process each polygon or multipolygon
+    for (const polygonCoords of polygons) {
+      // Ensure each ring has at least four coordinates and closes properly
+      const rings = polygonCoords.map(ring => {
+        const ringClosed = ring[0].every((val, index) => val === ring[ring.length - 1][index]) ? ring : [...ring, ring[0]];
+        return ringClosed.length >= 4 ? ringClosed : null;
+      }).filter(ring => ring !== null);
 
-      if (area > 200000) { // Apply grid splitting for large areas
-        const bbox = turf.bbox(thePolygon);
-        // Calculate the number of cells based on the area, 
-        const cellSide = area > 1000000 ? 100.0 : 10.0;
-        const squareGrid = turf.squareGrid(bbox, cellSide, { units: "kilometers" });
+      if (rings.length === 0) {
+        console.error("Invalid or too few coordinates to form a polygon:", polygonCoords);
+        continue;
+      }
 
-        squareGrid.features.forEach(cell => {
-          if (cell.geometry && thePolygon.geometry) { // Check both geometries exist
-            const intersection = turf.intersect(turf.featureCollection([cell, thePolygon]));
-            if (intersection && intersection.geometry && intersection.geometry.coordinates.length > 0) {
-              // If valid, process intersection
-              const data = earcut.flatten(intersection.geometry.coordinates);
-              const { vertices, holes, dimensions } = data;
-              const indices = earcut(vertices, holes, dimensions);
-              const mesh = createMesh(vertices, indices, dimensions, radius);
-              meshes.push(mesh);
-            }
-          } else {
-            console.log('Missing geometry:', cell, thePolygon);
-          }
-        });
+      const polygon = turf.polygon(rings);
+      const area = turf.area(polygon) / 1000000; // Convert area to square kilometers
 
-      } else { // Process smaller areas directly
-        const data = earcut.flatten(polygonCoords);
+      // Check the area to determine processing method
+      if (meshMethod === 'earcut' || area < 200000) {
+        const data = earcut.flatten(rings);
         const { vertices, holes, dimensions } = data;
         const indices = earcut(vertices, holes, dimensions);
         const mesh = createMesh(vertices, indices, dimensions, radius);
         meshes.push(mesh);
+      } else {
+        const cellSide = area > 1000000 ? 75.0 : 30.0;
+        const bbox = turf.bbox(polygon);
+        const squareGrid = turf.squareGrid(bbox, cellSide, { units: "kilometers" });
+
+        const clippedPolygons = squareGrid.features.map((cell) => {
+          const intersection = turf.intersect(turf.featureCollection([cell, polygon]));
+          return intersection && intersection.geometry && intersection.geometry.coordinates.length > 0 ? intersection : null;
+        }).filter(Boolean);
+
+        // Process each clipped polygon
+        for (const clipped of clippedPolygons) {
+          const data = earcut.flatten(clipped.geometry.coordinates);
+          const { vertices, holes, dimensions } = data;
+          const indices = earcut(vertices, holes, dimensions);
+          const mesh = createMesh(vertices, indices, dimensions, radius);
+          meshes.push(mesh);
+        }
       }
-    });
+    }
+  }
+
+  // Optionally save the computed meshes for large countries
+  if (["ru", "us", "ca", 'cn', 'br'].includes(name)) {
+    saveMeshData(name, meshes);
   }
 
   return meshes;
+}
+
+
+async function largePolygonToMeshes(polygon, area, radius) {
+  const cellSide = area > 1000000 ? 75.0 : 30.0;
+  const bbox = turf.bbox(polygon);
+  const squareGrid = turf.squareGrid(bbox, cellSide, { units: "kilometers" });
+
+  const clippedPolygons = squareGrid.features
+    .map((cell) => {
+      const intersection = turf.intersect(
+        turf.featureCollection([cell, polygon])
+      );
+      return intersection &&
+        intersection.geometry &&
+        intersection.geometry.coordinates.length > 0
+        ? intersection
+        : null;
+    })
+    .filter(Boolean);
+
+  console.log("Polygon splitted. Length:", clippedPolygons.length);
+
+  const meshes = []
+  clippedPolygons.forEach((clipped) => {
+    const mesh = polygonToMesh(clipped, radius);
+    meshes.push(mesh);
+  });
+  return meshes;
+}
+
+function polygonToMesh(polygon, radius) {
+  const data = earcut.flatten(polygon.geometry.coordinates);
+  return createMesh(data.vertices, data.indices, data.dimensions, radius);
 }
 
 function createMesh(vertices, indices, dimensions, radius) {
@@ -81,18 +241,19 @@ function createMesh(vertices, indices, dimensions, radius) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute(
     "position",
-    new THREE.Float32BufferAttribute(vertices3D, 3)
+    new THREE.Float32BufferAttribute(vertices3D.flat(), 3)
   );
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
+
   const material = new THREE.MeshBasicMaterial({
     color: DEFAULT_COLOR,
     side: THREE.DoubleSide,
   });
+
   return new THREE.Mesh(geometry, material);
 }
 
-// Function to convert GeoJSON polygons to 3D lines using THREE.js
 function geoJsonTo3DLines(geoJson, radius = DEFAULT_RADIUS) {
   if (!geoJson || !geoJson.features) {
     console.error("Invalid GeoJSON data:", geoJson);
@@ -137,7 +298,6 @@ function geoJsonTo3DLines(geoJson, radius = DEFAULT_RADIUS) {
   return lines;
 }
 
-// Function to convert GeoJSON polygons and multipolygons to a single 3D pin using THREE.js
 function geoJsonToSingle3DPin(geoJson, radius = DEFAULT_RADIUS) {
   if (!geoJson || !geoJson.features) {
     console.error("Invalid GeoJSON data:", geoJson);
@@ -171,11 +331,9 @@ function geoJsonToSingle3DPin(geoJson, radius = DEFAULT_RADIUS) {
     // Extract coordinates based on geometry type
     let centroidLatLng;
     if (firstFeature.geometry.type === "Polygon") {
-      // Take the first polygon of the first feature
       const firstPolygon = firstFeature.geometry.coordinates;
       centroidLatLng = calculateCentroid(firstPolygon);
     } else if (firstFeature.geometry.type === "MultiPolygon") {
-      // Take the first polygon of the first feature
       const firstPolygon = firstFeature.geometry.coordinates[0];
       centroidLatLng = calculateCentroid(firstPolygon);
     } else {
@@ -212,26 +370,21 @@ function geoJsonToSingle3DPin(geoJson, radius = DEFAULT_RADIUS) {
   return pins;
 }
 
-// Function to create a classic pin
 function createClassicPin(color) {
-  // Create a group for the pin
   const pinGroup = new THREE.Group();
 
-  // Scale factors based on globe radius
-  const stickHeight = 4; // Height of the stick (in units)
+  const stickHeight = 4;
   const stickGeometry = new THREE.CylinderGeometry(0.1, 0.1, stickHeight, 16);
   const stickMaterial = new THREE.MeshBasicMaterial({ color });
   const stick = new THREE.Mesh(stickGeometry, stickMaterial);
 
-  // Create the ball
-  const ballRadius = 1.5; // Radius of the ball (in units)
+  const ballRadius = 1.5;
   const ballGeometry = new THREE.SphereGeometry(ballRadius, 16, 16);
   const ballMaterial = new THREE.MeshBasicMaterial({ color });
   const ball = new THREE.Mesh(ballGeometry, ballMaterial);
 
-  // Create the base
-  const baseRadius = 0.5; // Radius of the base (in units)
-  const baseHeight = 0.2; // Height of the base (in units)
+  const baseRadius = 0.5;
+  const baseHeight = 0.2;
   const baseGeometry = new THREE.CylinderGeometry(
     baseRadius,
     baseRadius,
@@ -241,17 +394,23 @@ function createClassicPin(color) {
   const baseMaterial = new THREE.MeshBasicMaterial({ color });
   const base = new THREE.Mesh(baseGeometry, baseMaterial);
 
-  // Position the components along the Z-axis
   stick.position.set(0, stickHeight / 2, 0);
   ball.position.set(0, stickHeight + ballRadius, 0);
   base.position.set(0, -baseHeight / 2, 0);
 
-  // Add components to the group
   pinGroup.add(stick);
   pinGroup.add(ball);
   pinGroup.add(base);
 
   return pinGroup;
+}
+
+// Function to adjust the scale of existing meshes
+function adjustMeshScale(meshes, newRadius, oldRadius) {
+  const scaleRatio = newRadius / oldRadius;
+  meshes.forEach((mesh) => {
+    mesh.scale.set(scaleRatio, scaleRatio, scaleRatio);
+  });
 }
 
 // Function to remove previous geometries
@@ -269,6 +428,7 @@ function removePreviousGeometries(earth) {
 
 // Function to highlight a region with different styles
 async function highlightPolygons(
+  name,
   geoJson,
   earth,
   radius = DEFAULT_RADIUS,
@@ -281,8 +441,9 @@ async function highlightPolygons(
   // Highlight new polygons after a delay
   let polygonMeshes = [];
 
+  // Check if the meshes are already stored and reuse them if possible
   if (style === "mesh") {
-    polygonMeshes = await geoJsonTo3DMesh(geoJson, radius * elevation);
+    polygonMeshes = await geoJsonTo3DMesh(name, geoJson, radius * elevation);
   } else if (style === "lines") {
     polygonMeshes = geoJsonTo3DLines(geoJson, radius * elevation);
   } else if (style === "pin") {
