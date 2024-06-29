@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as turf from "@turf/turf";
 import earcut from "earcut";
 import { openDB } from "idb";
@@ -10,32 +12,32 @@ const DEFAULT_RADIUS = 100;
 const DEFAULT_COLOR = "red";
 
 var previousGeometries = [];
-var polygonCache = {};
+// var polygonCache = {};
 
 // Save polygons to the cache
-function savePolygonsToCache(key, data) {
-  polygonCache[key] = data;
-}
+// function savePolygonsToCache(key, data) {
+//   polygonCache[key] = data;
+// }
 
-// Get polygons from the cache
-function getPolygonsFromCache(key) {
-  return polygonCache[key] || null;
-}
+// // Get polygons from the cache
+// function getPolygonsFromCache(key) {
+//   return polygonCache[key] || null;
+// }
 
-// Convert polygons to storable data
-function convertPolygonsToData(polygons) {
-  return polygons.map((polygon) => ({
-    coordinates: polygon.geometry.coordinates,
-    properties: polygon.properties,
-  }));
-}
+// // Convert polygons to storable data
+// function convertPolygonsToData(polygons) {
+//   return polygons.map((polygon) => ({
+//     coordinates: polygon.geometry.coordinates,
+//     properties: polygon.properties,
+//   }));
+// }
 
-// Recreate polygons from stored data
-function recreatePolygons(polygonData) {
-  return polygonData.map((data) =>
-    turf.polygon(data.coordinates, data.properties)
-  );
-}
+// // Recreate polygons from stored data
+// function recreatePolygons(polygonData) {
+//   return polygonData.map((data) =>
+//     turf.polygon(data.coordinates, data.properties)
+//   );
+// }
 
 async function openDatabase() {
   return openDB("meshData", 1, {
@@ -147,6 +149,160 @@ function combineMeshes(meshes) {
   return new THREE.Mesh(mergedGeometry, mergedMaterial);
 }
 
+async function exportMeshToGLB(mesh) {
+  if (!GLTFExporter) {
+    console.error('GLTFExporter is not available');
+    return;
+  }
+  const exporter = new GLTFExporter();
+
+  return new Promise((resolve, reject) => {
+    exporter.parse(mesh, function (gltf) {
+
+      try {
+        let blob;
+        if (gltf instanceof ArrayBuffer) {
+          blob = new Blob([gltf], { type: 'model/gltf-binary' });
+          console.log("Export successful, GLB data is ready.");
+        } else {
+          blob = new Blob([JSON.stringify(gltf)], { type: 'model/gltf-binary' });
+          console.log("Export successful, JSON converted to GLB.");
+        }
+        console.log("GLB size:", (blob.size / 1024).toFixed(2), "KB");
+        resolve(blob);
+      } catch (error) {
+        console.error("Export failed:", error);
+        reject(error);
+      }
+    }, { binary: true });
+  });
+}
+
+async function saveMeshDataAsBinary(key, blob) {
+  const db = await openDatabase();
+  const tx = db.transaction("meshData", "readwrite");
+  const store = tx.objectStore("meshData");
+  console.log("Blob size before saving:", blob.size / 1024 + " KB");
+
+  tx.onerror = (event) => {
+    console.error("Failed to save blob:", event.target.error);
+  };
+
+  // Store the blob in IndexedDB
+  await store.put({ key, value: blob });
+  await tx.complete;
+  console.log("Saved mesh data to database for:", key);
+
+  // To verify the saved data
+  const readBack = await store.get(key);
+  if (readBack?.value) {
+    console.log("Read back size:", readBack.value.size / 1024 + " KB");
+  } else {
+    console.log("No data found for key:", key);
+  }
+}
+
+async function deserializeGLB(blob) {
+  const loader = new GLTFLoader();
+  return new Promise((resolve, reject) => {
+    if (!blob) {
+      reject("No blob provided for deserialization");
+      return;
+    }
+
+    console.log("Deserializing GLB...");
+    const reader = new FileReader();
+    reader.readAsArrayBuffer(blob);
+    reader.onload = () => {
+      loader.parse(reader.result, '', (gltf) => {
+        console.log("GLB data deserialized successfully");
+        const meshes = [];
+        gltf.scene.traverse((child) => {
+          if (child.isMesh) {
+            meshes.push(child);
+          }
+        });
+        resolve(meshes); // Resolves with an array of meshes
+      }, (error) => {
+        console.error("Error deserializing GLB data:", error);
+        reject(error);
+      });
+    };
+    reader.onerror = (error) => {
+      console.error("Error reading blob:", error);
+      reject(error);
+    };
+  });
+}
+
+
+async function loadMeshDataAsBinary(key) {
+  console.log("Loading mesh data from database for:", key);
+  try {
+    const db = await openDatabase();
+    const tx = db.transaction("meshData", "readonly");
+    const store = tx.objectStore("meshData");
+    const result = await store.get(key);
+
+    if (result) {
+      console.log(result, result.value)
+      return await deserializeGLB(result.value);  // Directly use the deserialized GLB to get meshes
+    } else {
+      console.error("Mesh data for", key, "is not available.");
+      return null;
+    }
+  } catch (error) {
+    console.error("Failed to load mesh data for", key, "with error:", error);
+    return null;
+  }
+}
+
+// async function downloadFromIDB(key) {
+//   const db = await openDatabase(); // Ensure this uses your defined 'openDatabase' function
+//   const tx = db.transaction("meshData", "readonly");
+//   const store = tx.objectStore("meshData");
+//   const result = await store.get(key);
+
+//   if (result) {
+//     const blob = result.value;
+//     const url = URL.createObjectURL(blob);
+//     const a = document.createElement('a');
+//     a.href = url;
+//     a.download = key + '.glb'; // Assuming the file is a GLB file
+//     document.body.appendChild(a);
+//     a.click();
+//     document.body.removeChild(a);
+//     URL.revokeObjectURL(url);
+//   } else {
+//     console.error("No data found for key:", key);
+//   }
+// }
+
+async function loadMeshDataFromFile(name) {
+  console.log("Loading mesh data from file for:", name);
+  return new Promise((resolve, reject) => {
+    const loader = new GLTFLoader();
+    const path = `./data/${name}.glb`; // Adjust the path as necessary
+
+    loader.load(path, (gltf) => {
+      console.log("Mesh data loaded from file:", name);
+      const meshes = [];
+      gltf.scene.traverse((child) => {
+        if (child.isMesh) {
+          meshes.push(child);
+        }
+      });
+      resolve(meshes);
+    }, undefined, (error) => {
+      console.error("Failed to load mesh data from file:", error);
+      reject(error);
+    });
+  });
+}
+
+
+
+
 async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
   if (!geoJson || !geoJson.features) {
     console.error("Invalid GeoJSON data:", geoJson);
@@ -158,12 +314,17 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
 
   // Attempt to load precomputed meshes from the database
   if (["ru", "ca", "us", "cn", "br", "au"].includes(name)) {
-    const data = await loadMeshData(name);
-    if (data) {
-      console.log("Meshed data loaded from database:", name);
-      return data;
+    try {
+      const meshes = await loadMeshDataFromFile(name);
+      if (meshes) {
+        console.log("Mesh data loaded from database:", name);
+        return meshes; // Directly use the meshes loaded from the database
+      }
+    } catch (error) {
+      console.error("Failed to load mesh data from database:", error);
     }
   }
+
 
   // Process each feature in the GeoJSON
   for (const feature of geoJson.features) {
@@ -177,8 +338,8 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
       geometryType === "Polygon"
         ? [feature.geometry.coordinates]
         : geometryType === "MultiPolygon"
-        ? feature.geometry.coordinates
-        : null;
+          ? feature.geometry.coordinates
+          : null;
 
     if (!polygons) {
       console.error(`Unsupported geometry type: ${geometryType}`);
@@ -250,10 +411,15 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
   }
 
   // Optionally save the computed meshes for large countries
-  if (["ru", "ca", "us", "cn", "br", "au"].includes(name)) {
-    const combinedMesh = combineMeshes(meshes);
-    saveMeshData(name, [combinedMesh]); // Save the combined mesh as an array
-  }
+  // if (["ru", "ca", "us", "cn", "br", "au"].includes(name)) {
+  //   const combinedMesh = combineMeshes(meshes);
+  //   exportMeshToGLB(combinedMesh).then(glbBlob => {
+  //     saveMeshDataAsBinary(name, glbBlob); // Save the GLB blob to IndexedDB
+  //   }).catch(error => {
+  //     console.error("Failed to save mesh data as GLB:", error);
+  //   });
+  // }
+
 
   return meshes;
 }
