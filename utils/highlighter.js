@@ -257,26 +257,26 @@ async function loadMeshDataAsBinary(key) {
   }
 }
 
-// async function downloadFromIDB(key) {
-//   const db = await openDatabase(); // Ensure this uses your defined 'openDatabase' function
-//   const tx = db.transaction("meshData", "readonly");
-//   const store = tx.objectStore("meshData");
-//   const result = await store.get(key);
+async function downloadFromIDB(key) {
+  const db = await openDatabase(); // Ensure this uses your defined 'openDatabase' function
+  const tx = db.transaction("meshData", "readonly");
+  const store = tx.objectStore("meshData");
+  const result = await store.get(key);
 
-//   if (result) {
-//     const blob = result.value;
-//     const url = URL.createObjectURL(blob);
-//     const a = document.createElement('a');
-//     a.href = url;
-//     a.download = key + '.glb'; // Assuming the file is a GLB file
-//     document.body.appendChild(a);
-//     a.click();
-//     document.body.removeChild(a);
-//     URL.revokeObjectURL(url);
-//   } else {
-//     console.error("No data found for key:", key);
-//   }
-// }
+  if (result) {
+    const blob = result.value;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = key + '.glb'; // Assuming the file is a GLB file
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } else {
+    console.error("No data found for key:", key);
+  }
+}
 
 async function loadMeshDataFromFile(name) {
   console.log("Loading mesh data from file for:", name);
@@ -410,20 +410,18 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
   }
 
   // Optionally save the computed meshes for large countries
-  // if (["ru", "ca", "us", "cn", "br", "au"].includes(name)) {
-  //   const combinedMesh = combineMeshes(meshes);
-  //   exportMeshToGLB(combinedMesh).then(glbBlob => {
-  //     saveMeshDataAsBinary(name, glbBlob); // Save the GLB blob to IndexedDB
-  //   }).catch(error => {
-  //     console.error("Failed to save mesh data as GLB:", error);
-  //   });
-  // }
-  if (meshes.length <= 3) {
-    return meshes
-  } else {
-    const mergedMesh = combineMeshes(meshes);
-    return [mergedMesh];
+  if (["ru", "ca", "us", "cn", "br", "au", "cl"].includes(name)) {
+    const combinedMesh = combineMeshes(meshes);
+    exportMeshToGLB(combinedMesh).then(glbBlob => {
+      saveMeshDataAsBinary(name, glbBlob); // Save the GLB blob to IndexedDB
+      setTimeout(() => {
+        downloadFromIDB(name);
+      }, 500);
+    }).catch(error => {
+      console.error("Failed to save mesh data as GLB:", error);
+    });
   }
+  return meshes;
 
 }
 
