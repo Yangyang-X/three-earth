@@ -218,7 +218,7 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
         const mesh = createMesh(vertices, indices, dimensions, radius);
         meshes.push(mesh);
       } else {
-        const cellSide = area > 1000000 ? 100.0 : 30.0;
+        const cellSide = area > 1000000 ? 75.0 : 30.0;
         const bbox = turf.bbox(polygon);
         const squareGrid = turf.squareGrid(bbox, cellSide, {
           units: "kilometers",
