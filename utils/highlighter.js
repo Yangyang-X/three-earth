@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import * as turf from "@turf/turf";
 import earcut from "earcut";
 import { openDB } from "idb";
@@ -99,15 +100,51 @@ async function loadMeshData(key) {
     );
     console.log(`${new Date().toISOString()}: Meshes loaded for ${key}`);
 
+    // Calculate the size of the data in kilobytes
+    const jsonData = JSON.stringify(result.value);
+    const sizeInBytes = new Blob([jsonData]).size;
+    const sizeInKilobytes = sizeInBytes / 1024;
+    console.log(`Data size: ${sizeInKilobytes.toFixed(2)} KB`);
+
     return meshes;
   } else {
     console.error(
-      "Mesh data for key",
+      "Mesh data for ",
       key,
       "is not properly formatted or is missing."
     );
     return null;
   }
+}
+
+function combineMeshes(meshes) {
+  // Filter out any meshes that don't have geometry or material to avoid errors
+  const filteredMeshes = meshes.filter(
+    (mesh) => mesh.geometry && mesh.material
+  );
+  console.log(
+    "Meshes count: %s, filtered count: %s",
+    meshes.length,
+    filteredMeshes.length
+  );
+
+  // Convert Mesh to BufferGeometry if necessary
+  const geometries = filteredMeshes.map((mesh) => {
+    if (mesh.geometry.isBufferGeometry) {
+      return mesh.geometry;
+    } else {
+      return new THREE.BufferGeometry().fromGeometry(mesh.geometry);
+    }
+  });
+
+  // Merge all geometries into one
+  const mergedGeometry = mergeGeometries(geometries, false);
+
+  // Assuming all meshes share the same material (for simplicity)
+  const mergedMaterial = filteredMeshes[0].material;
+
+  // Create a new mesh with the merged geometry and material
+  return new THREE.Mesh(mergedGeometry, mergedMaterial);
 }
 
 async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
@@ -117,10 +154,10 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
   }
 
   let meshes = [];
-  const meshMethod = geoJson['meshMethod'];
+  const meshMethod = geoJson["meshMethod"];
 
   // Attempt to load precomputed meshes from the database
-  if (["ru", "us", "ca", 'cn', 'br'].includes(name)) {
+  if (["ru", "ca", "us", "cn", "br", "au"].includes(name)) {
     const data = await loadMeshData(name);
     if (data) {
       console.log("Meshed data loaded from database:", name);
@@ -136,7 +173,12 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
     }
 
     const geometryType = feature.geometry.type;
-    let polygons = geometryType === "Polygon" ? [feature.geometry.coordinates] : geometryType === "MultiPolygon" ? feature.geometry.coordinates : null;
+    let polygons =
+      geometryType === "Polygon"
+        ? [feature.geometry.coordinates]
+        : geometryType === "MultiPolygon"
+        ? feature.geometry.coordinates
+        : null;
 
     if (!polygons) {
       console.error(`Unsupported geometry type: ${geometryType}`);
@@ -146,13 +188,22 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
     // Process each polygon or multipolygon
     for (const polygonCoords of polygons) {
       // Ensure each ring has at least four coordinates and closes properly
-      const rings = polygonCoords.map(ring => {
-        const ringClosed = ring[0].every((val, index) => val === ring[ring.length - 1][index]) ? ring : [...ring, ring[0]];
-        return ringClosed.length >= 4 ? ringClosed : null;
-      }).filter(ring => ring !== null);
+      const rings = polygonCoords
+        .map((ring) => {
+          const ringClosed = ring[0].every(
+            (val, index) => val === ring[ring.length - 1][index]
+          )
+            ? ring
+            : [...ring, ring[0]];
+          return ringClosed.length >= 4 ? ringClosed : null;
+        })
+        .filter((ring) => ring !== null);
 
       if (rings.length === 0) {
-        console.error("Invalid or too few coordinates to form a polygon:", polygonCoords);
+        console.error(
+          "Invalid or too few coordinates to form a polygon:",
+          polygonCoords
+        );
         continue;
       }
 
@@ -160,21 +211,31 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
       const area = turf.area(polygon) / 1000000; // Convert area to square kilometers
 
       // Check the area to determine processing method
-      if (meshMethod === 'earcut' || area < 200000) {
+      if (meshMethod === "earcut" || area < 200000) {
         const data = earcut.flatten(rings);
         const { vertices, holes, dimensions } = data;
         const indices = earcut(vertices, holes, dimensions);
         const mesh = createMesh(vertices, indices, dimensions, radius);
         meshes.push(mesh);
       } else {
-        const cellSide = area > 1000000 ? 75.0 : 30.0;
+        const cellSide = area > 1000000 ? 100.0 : 30.0;
         const bbox = turf.bbox(polygon);
-        const squareGrid = turf.squareGrid(bbox, cellSide, { units: "kilometers" });
+        const squareGrid = turf.squareGrid(bbox, cellSide, {
+          units: "kilometers",
+        });
 
-        const clippedPolygons = squareGrid.features.map((cell) => {
-          const intersection = turf.intersect(turf.featureCollection([cell, polygon]));
-          return intersection && intersection.geometry && intersection.geometry.coordinates.length > 0 ? intersection : null;
-        }).filter(Boolean);
+        const clippedPolygons = squareGrid.features
+          .map((cell) => {
+            const intersection = turf.intersect(
+              turf.featureCollection([cell, polygon])
+            );
+            return intersection &&
+              intersection.geometry &&
+              intersection.geometry.coordinates.length > 0
+              ? intersection
+              : null;
+          })
+          .filter(Boolean);
 
         // Process each clipped polygon
         for (const clipped of clippedPolygons) {
@@ -189,13 +250,13 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
   }
 
   // Optionally save the computed meshes for large countries
-  if (["ru", "us", "ca", 'cn', 'br'].includes(name)) {
-    saveMeshData(name, meshes);
+  if (["ru", "ca", "us", "cn", "br", "au"].includes(name)) {
+    const combinedMesh = combineMeshes(meshes);
+    saveMeshData(name, [combinedMesh]); // Save the combined mesh as an array
   }
 
   return meshes;
 }
-
 
 async function largePolygonToMeshes(polygon, area, radius) {
   const cellSide = area > 1000000 ? 75.0 : 30.0;
@@ -217,7 +278,7 @@ async function largePolygonToMeshes(polygon, area, radius) {
 
   console.log("Polygon splitted. Length:", clippedPolygons.length);
 
-  const meshes = []
+  const meshes = [];
   clippedPolygons.forEach((clipped) => {
     const mesh = polygonToMesh(clipped, radius);
     meshes.push(mesh);
