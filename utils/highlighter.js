@@ -346,7 +346,6 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
       continue;
     }
 
-    // Process each polygon or multipolygon
     for (const polygonCoords of polygons) {
       // Ensure each ring has at least four coordinates and closes properly
       const rings = polygonCoords
@@ -372,14 +371,14 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
       const area = turf.area(polygon) / 1000000; // Convert area to square kilometers
 
       // Check the area to determine processing method
-      if (meshMethod === "earcut" || area < 200000) {
+      if (meshMethod === 'earcut' || area < 60000 || (meshMethod !== "turf" && area < 200000)) {
         const data = earcut.flatten(rings);
         const { vertices, holes, dimensions } = data;
         const indices = earcut(vertices, holes, dimensions);
         const mesh = createMesh(vertices, indices, dimensions, radius);
         meshes.push(mesh);
       } else {
-        const cellSide = area > 1000000 ? 75.0 : 30.0;
+        const cellSide = area > 1000000 ? 75.0 : 20.0;
         const bbox = turf.bbox(polygon);
         const squareGrid = turf.squareGrid(bbox, cellSide, {
           units: "kilometers",
@@ -419,9 +418,13 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
   //     console.error("Failed to save mesh data as GLB:", error);
   //   });
   // }
+  if (meshes.length <= 3) {
+    return meshes
+  } else {
+    const mergedMesh = combineMeshes(meshes);
+    return [mergedMesh];
+  }
 
-
-  return meshes;
 }
 
 async function largePolygonToMeshes(polygon, area, radius) {

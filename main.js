@@ -75,11 +75,11 @@ class World {
       // Calculate the area of the country
       const area = turf.area(turf.feature(firstFeature.geometry)) / 1000000; // Area in square kilometers
   
-      if (area > 1000000) { // Large country
-        // Highlight polygons immediately
-        highlightPolygons(name, geoJsonData, this.earth, this.earthRadius, style);
+      if (area > 500000) { // Large country
         // Rotate the globe
         this.rotateGlobeTo(targetLatLng);
+        // Highlight polygons immediately
+        highlightPolygons(name, geoJsonData, this.earth, this.earthRadius, style);
       } else { // Small country
         // Rotate the globe and highlight polygons after rotation is complete
         this.rotateGlobeTo(targetLatLng, () => {
