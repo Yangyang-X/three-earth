@@ -11,7 +11,6 @@ import { latLngTo3DPosition } from "./geoUtils.js";
 const DEFAULT_RADIUS = 100;
 const DEFAULT_COLOR = "red";
 
-var previousGeometries = [];
 // var polygonCache = {};
 
 // Save polygons to the cache
@@ -303,7 +302,7 @@ async function loadMeshDataFromFile(name) {
 
 
 
-async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
+async function geoJsonTo3DMesh( geoJson, radius = DEFAULT_RADIUS) {
   if (!geoJson || !geoJson.features) {
     console.error("Invalid GeoJSON data:", geoJson);
     return [];
@@ -312,6 +311,7 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
   let meshes = [];
   const meshMethod = geoJson["meshMethod"];
 
+  const name = geoJson.name;
   // Attempt to load precomputed meshes from the database
   if (["ru", "ca", "us", "cn", "br", "au"].includes(name)) {
     try {
@@ -423,39 +423,6 @@ async function geoJsonTo3DMesh(name, geoJson, radius = DEFAULT_RADIUS) {
   }
   return meshes;
 
-}
-
-async function largePolygonToMeshes(polygon, area, radius) {
-  const cellSide = area > 1000000 ? 75.0 : 30.0;
-  const bbox = turf.bbox(polygon);
-  const squareGrid = turf.squareGrid(bbox, cellSide, { units: "kilometers" });
-
-  const clippedPolygons = squareGrid.features
-    .map((cell) => {
-      const intersection = turf.intersect(
-        turf.featureCollection([cell, polygon])
-      );
-      return intersection &&
-        intersection.geometry &&
-        intersection.geometry.coordinates.length > 0
-        ? intersection
-        : null;
-    })
-    .filter(Boolean);
-
-  console.log("Polygon splitted. Length:", clippedPolygons.length);
-
-  const meshes = [];
-  clippedPolygons.forEach((clipped) => {
-    const mesh = polygonToMesh(clipped, radius);
-    meshes.push(mesh);
-  });
-  return meshes;
-}
-
-function polygonToMesh(polygon, radius) {
-  const data = earcut.flatten(polygon.geometry.coordinates);
-  return createMesh(data.vertices, data.indices, data.dimensions, radius);
 }
 
 function createMesh(vertices, indices, dimensions, radius) {
@@ -641,48 +608,31 @@ function adjustMeshScale(meshes, newRadius, oldRadius) {
   });
 }
 
-// Function to remove previous geometries
-function removePreviousGeometries(earth) {
-  if (previousGeometries.length > 0) {
-    previousGeometries.forEach((geometryId) => {
-      const previousGeometry = earth.getObjectByProperty("uuid", geometryId);
-      if (previousGeometry) {
-        earth.remove(previousGeometry);
-      }
-    });
-    previousGeometries.length = 0;
-  }
-}
+
+
 
 // Function to highlight a region with different styles
-async function highlightPolygons(
-  name,
+async function polygonsToMesh(
   geoJson,
-  earth,
   radius = DEFAULT_RADIUS,
   style = "mesh",
   elevation = 1.0
 ) {
-  // Resize the Earth to the initial radius if zoomed
-  earth.scale.set(1, 1, 1);
 
   // Highlight new polygons after a delay
   let polygonMeshes = [];
 
   // Check if the meshes are already stored and reuse them if possible
   if (style === "mesh") {
-    polygonMeshes = await geoJsonTo3DMesh(name, geoJson, radius * elevation);
+    polygonMeshes = await geoJsonTo3DMesh( geoJson, radius * elevation);
   } else if (style === "lines") {
     polygonMeshes = geoJsonTo3DLines(geoJson, radius * elevation);
   } else if (style === "pin") {
     polygonMeshes = geoJsonToSingle3DPin(geoJson, radius * elevation);
   }
 
-  // Add polygon meshes to the Earth
-  polygonMeshes.forEach((geometry) => {
-    previousGeometries.push(geometry.uuid);
-    earth.add(geometry);
-  });
+  return polygonMeshes;
+
 }
 
-export { highlightPolygons, removePreviousGeometries };
+export { polygonsToMesh };
