@@ -19,6 +19,8 @@ let controls;
 let resizer;
 var previousGeometries = [];
 
+var precomputedMeshes = {};
+
 class World {
   constructor(container) {
     const containerWidth = container.clientWidth;
@@ -42,7 +44,6 @@ class World {
     resizer = new Resizer(container, this.camera, this.renderer);
 
     this.previousTargetLatLng = { lat: 0, lng: -90 };
-    this.resetPosition();
   }
 
   resetPosition() {
@@ -54,12 +55,12 @@ class World {
     );
   }
 
-  removePreviousGeometries(earth) {
+  removePreviousGeometries() {
     if (previousGeometries.length > 0) {
       previousGeometries.forEach((geometryId) => {
-        const previousGeometry = earth.getObjectByProperty("uuid", geometryId);
-        if (previousGeometry) {
-          earth.remove(previousGeometry);
+        const geometry = this.earth.getObjectByProperty("uuid", geometryId);
+        if (geometry) {
+          this.earth.remove(geometry);
         }
       });
       previousGeometries.length = 0;
@@ -72,7 +73,7 @@ class World {
       return;
     }
 
-    removePreviousGeometries(this.earth);
+    this.removePreviousGeometries(this.earth);
 
     // Start loading meshes asynchronously
     geoJsonData.name = name;
@@ -91,8 +92,6 @@ class World {
         this.earth.add(geometry);
         previousGeometries.push(geometry.uuid);
       });
-
-      console.log("Mesh data loaded and displayed after globe rotation.");
     });
   }
 
@@ -164,6 +163,15 @@ class World {
 
   stop() {
     this.renderer.setAnimationLoop(null);
+  }
+
+  async prepareBigCountryMeshes(geoJsons) {
+    for (let i = 0; i < geoJsons.length; i++) {
+      const geoJson = geoJsons[i];
+      const name = geoJson.name;
+      const mesh = await polygonsToMesh(geoJson);
+      precomputedMeshes[name] = mesh;
+    }
   }
 }
 
