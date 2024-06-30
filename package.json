@@ -1,6 +1,6 @@
 {
   "name": "three-earth",
-  "version": "1.0.105",
+  "version": "1.0.122",
   "description": "A Three.js 3D earth",
   "main": "main.js",
   "scripts": {

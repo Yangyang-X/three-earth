@@ -6,7 +6,7 @@ import { createLight } from "./components/light.js";
 import { createRenderer } from "./systems/renderer.js";
 import { createControls } from "./systems/cameraControls.js";
 import { Resizer } from "./systems/resizer.js";
-import { polygonsToMesh } from "./utils/meshUtils.js";
+import { generateCountryOutlines, polygonsToMesh } from "./utils/meshUtils.js";
 import {
   calculatePolygonCentroid,
   latLngTo3DPosition,
@@ -46,7 +46,17 @@ class World {
     this.previousTargetLatLng = { lat: 0, lng: -90 };
   }
 
-  resetPosition() {
+  start() {
+    this.renderer.setAnimationLoop(() => {
+      this.renderer.render(this.scene, this.camera);
+    });
+  }
+
+  stop() {
+    this.renderer.setAnimationLoop(null);
+  }
+
+  resetGlobePosition() {
     const [x, y, z] = latLngTo3DPosition(0, -90, this.earthRadius);
     const direction = new THREE.Vector3(x, y, z).normalize();
     this.earth.quaternion.setFromUnitVectors(
@@ -55,45 +65,9 @@ class World {
     );
   }
 
-  removePreviousGeometries() {
-    if (previousGeometries.length > 0) {
-      previousGeometries.forEach((geometryId) => {
-        const geometry = this.earth.getObjectByProperty("uuid", geometryId);
-        if (geometry) {
-          this.earth.remove(geometry);
-        }
-      });
-      previousGeometries.length = 0;
-    }
-  }
 
-  async showCountry(name, geoJsonData, style, meshMethod) {
-    if (!geoJsonData) {
-      console.error("No GeoJSON data provided");
-      return;
-    }
 
-    this.removePreviousGeometries(this.earth);
 
-    // Start loading meshes asynchronously
-    geoJsonData.name = name;
-    const meshPromise = polygonsToMesh(geoJsonData, 100, style, 1.0);
-
-    const firstFeature = geoJsonData.features[0];
-    const centroid = calculatePolygonCentroid(firstFeature.geometry);
-    geoJsonData["meshMethod"] = meshMethod;
-    const targetLatLng = { lat: centroid.lat, lng: centroid.lng };
-
-    // Rotate the globe immediately
-    this.rotateGlobeTo(targetLatLng, async () => {
-      // Wait for the mesh data to be ready
-      const meshes = await meshPromise;
-      meshes.forEach((geometry) => {
-        this.earth.add(geometry);
-        previousGeometries.push(geometry.uuid);
-      });
-    });
-  }
 
   rotateGlobeTo(targetLatLng, onComplete) {
     const initialLatLng = this.previousTargetLatLng;
@@ -155,14 +129,47 @@ class World {
     animate();
   }
 
-  start() {
-    this.renderer.setAnimationLoop(() => {
-      this.renderer.render(this.scene, this.camera);
-    });
+  removePreviousGeometries() {
+    if (previousGeometries.length > 0) {
+      previousGeometries.forEach((geometryId) => {
+        const geometry = this.earth.getObjectByProperty("uuid", geometryId);
+        if (geometry) {
+          this.earth.remove(geometry);
+        }
+      });
+      previousGeometries.length = 0;
+    }
   }
 
-  stop() {
-    this.renderer.setAnimationLoop(null);
+  async showCountry(name, geoJson, style, meshMethod) {
+    if (!geoJson) {
+      console.error("No GeoJSON data provided");
+      return;
+    }
+
+    this.removePreviousGeometries(this.earth);
+
+    // Start loading meshes asynchronously
+    geoJson.name = name;
+    geoJson.meshMethod = meshMethod;
+    const meshPromise = polygonsToMesh(geoJson, 100, style, 1.0);
+
+    const firstFeature = geoJson.features[0];
+    const centroid = calculatePolygonCentroid(firstFeature.geometry);
+    const targetLatLng = { lat: centroid.lat, lng: centroid.lng };
+
+    // Rotate the globe immediately
+    this.rotateGlobeTo(targetLatLng, async () => {
+      // Wait for the mesh data to be ready
+      const meshes = await meshPromise;
+      meshes.forEach((geometry) => {
+        // if (geometry.material) {
+        //   geometry.material.color.set(0x00ff00); //! Sets the color to red
+        // }
+        this.earth.add(geometry);
+        previousGeometries.push(geometry.uuid);
+      });
+    });
   }
 
   async prepareBigCountryMeshes(geoJsons) {
@@ -172,6 +179,11 @@ class World {
       const mesh = await polygonsToMesh(geoJson);
       precomputedMeshes[name] = mesh;
     }
+  }
+
+  async drawCountryOutlines(geojson, color) {
+    const mesh = await generateCountryOutlines(geojson, color);
+    this.earth.add(mesh);
   }
 }
 

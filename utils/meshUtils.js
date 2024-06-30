@@ -119,28 +119,41 @@ async function loadMeshData(key) {
 }
 
 function combineMeshes(meshes) {
-  // Filter out any meshes that don't have geometry or material to avoid errors
-  const filteredMeshes = meshes.filter(
-    (mesh) => mesh.geometry && mesh.material
+  // Filter out any meshes that don't have geometry or are without material (assuming lines might not always have materials)
+  const filteredMeshes = meshes.filter((mesh) => mesh.geometry);
+
+  // Determine if these are line meshes by checking if any use a LineMaterial
+  const areLines = filteredMeshes.some(
+    (mesh) => mesh.material instanceof THREE.LineBasicMaterial
   );
 
-  // Convert Mesh to BufferGeometry if necessary
-  const geometries = filteredMeshes.map((mesh) => {
-    if (mesh.geometry.isBufferGeometry) {
-      return mesh.geometry;
-    } else {
-      return new THREE.BufferGeometry().fromGeometry(mesh.geometry);
-    }
-  });
+  // Combine geometries based on their type
+  if (areLines) {
+    // Combine line geometries
+    const materials = filteredMeshes.map((mesh) => mesh.material);
+    const geometries = filteredMeshes.map((mesh) => mesh.geometry);
 
-  // Merge all geometries into one
-  const mergedGeometry = mergeGeometries(geometries, false);
+    // Since lines might not need to be merged in the same way, you might consider just grouping them
+    const lineGroup = new THREE.Group();
+    geometries.forEach((geometry, index) => {
+      const lineMesh = new THREE.LineLoop(geometry, materials[index]);
+      lineGroup.add(lineMesh);
+    });
+    return lineGroup;
+  } else {
+    // Combine solid geometries as before
+    const geometries = filteredMeshes.map((mesh) => {
+      if (mesh.geometry.isBufferGeometry) {
+        return mesh.geometry;
+      } else {
+        return new THREE.BufferGeometry().fromGeometry(mesh.geometry);
+      }
+    });
 
-  // Assuming all meshes share the same material (for simplicity)
-  const mergedMaterial = filteredMeshes[0].material;
-
-  // Create a new mesh with the merged geometry and material
-  return new THREE.Mesh(mergedGeometry, mergedMaterial);
+    const mergedGeometry = mergeGeometries(geometries, false);
+    const mergedMaterial = filteredMeshes[0].material; // Assuming all use the same material for simplicity
+    return new THREE.Mesh(mergedGeometry, mergedMaterial);
+  }
 }
 
 async function exportMeshToGLB(mesh) {
@@ -181,7 +194,6 @@ async function saveMeshDataAsBinary(key, blob) {
   const db = await openDatabase();
   const tx = db.transaction("meshData", "readwrite");
   const store = tx.objectStore("meshData");
-
 
   tx.onerror = (event) => {
     console.error("Failed to save blob:", event.target.error);
@@ -302,22 +314,59 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
     return [];
   }
 
-  let meshes = [];
-  const meshMethod = geoJson["meshMethod"];
-
   const name = geoJson.name;
+  const meshMethod = geoJson.meshMethod;
+
+  let meshes = [];
   const glbCountries = [
-    "in", "ar", "kz", "dz", "cd", "sa", "mx", "sd", "ly", "ir", "mn", "pe", "td",
-    "et", "cl", "ma", "af", "mm", "ml", "ao", "ne", "co", "za", "cg", "mr", "eg",
-    "tz", "ng", "ve", "pk", "na", "mz", "tr", "us", "ca", "ru", "cn", "au", "br", "fr", "id"
+    "in",
+    "ar",
+    "kz",
+    "dz",
+    "cd",
+    "sa",
+    "mx",
+    "sd",
+    "ly",
+    "ir",
+    "mn",
+    "pe",
+    "td",
+    "et",
+    "cl",
+    "ma",
+    "af",
+    "mm",
+    "ml",
+    "ao",
+    "ne",
+    "co",
+    "za",
+    "cg",
+    "mr",
+    "eg",
+    "tz",
+    "ng",
+    "ve",
+    "pk",
+    "na",
+    "mz",
+    "tr",
+    "us",
+    "ca",
+    "ru",
+    "cn",
+    "au",
+    "br",
+    "fr",
+    "id",
   ];
-  
+
   // Attempt to load precomputed meshes from the database
   if (glbCountries.includes(name)) {
     try {
       const meshes = await loadMeshDataFromFile(name);
       if (meshes) {
-        console.log("Mesh data loaded from database:", name);
         return meshes; // Directly use the meshes loaded from the database
       }
     } catch (error) {
@@ -337,8 +386,8 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
       geometryType === "Polygon"
         ? [feature.geometry.coordinates]
         : geometryType === "MultiPolygon"
-        ? feature.geometry.coordinates
-        : null;
+          ? feature.geometry.coordinates
+          : null;
 
     if (!polygons) {
       console.error(`Unsupported geometry type: ${geometryType}`);
@@ -370,7 +419,9 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
       const area = turf.area(polygon) / 1000000; // Convert area to square kilometers
 
       // Check the area to determine processing method
-      if (meshMethod === "earcut" || (area < 200000 && meshMethod !== "turf")) {
+      const usingTurf = meshMethod === "turf" || area >= 200000;
+
+      if (!usingTurf) {
         const data = earcut.flatten(rings);
         const { vertices, holes, dimensions } = data;
         const indices = earcut(vertices, holes, dimensions);
@@ -409,12 +460,43 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
   }
 
   // Optionally save the computed meshes for large countries
-  if ( [
-    "IN", "AR", "KZ", "DZ",
-    "CD", "SA", "MX", "SD", "LY", "IR", "MN", "PE", "TD", // existing 20 largest
-    "ET", "CL", "MA", "AF", "MM", "ML", "AO", "NE", "CO", "ZA", // 20 additional large countries
-    "CG", "MR", "EG", "TZ", "NG", "VE", "PK", "NA", "MZ", "TR"  // 20 additional large countries
-].includes(name.toUpperCase())) {
+  if (
+    [
+      "IN",
+      "AR",
+      "KZ",
+      "DZ",
+      "CD",
+      "SA",
+      "MX",
+      "SD",
+      "LY",
+      "IR",
+      "MN",
+      "PE",
+      "TD", // existing 20 largest
+      "ET",
+      "CL",
+      "MA",
+      "AF",
+      "MM",
+      "ML",
+      "AO",
+      "NE",
+      "CO",
+      "ZA", // 20 additional large countries
+      "CG",
+      "MR",
+      "EG",
+      "TZ",
+      "NG",
+      "VE",
+      "PK",
+      "NA",
+      "MZ",
+      "TR", // 20 additional large countries
+    ].includes(name.toUpperCase())
+  ) {
     const combinedMesh = combineMeshes(meshes);
     exportMeshToGLB(combinedMesh)
       .then((glbBlob) => {
@@ -634,4 +716,62 @@ async function polygonsToMesh(
   return polygonMeshes;
 }
 
-export { polygonsToMesh };
+function createOutlineMesh(vertices, radius, color) {
+  const points = vertices.map(([lng, lat]) => {
+    const [x, y, z] = latLngTo3DPosition(lat, lng, radius);
+    return new THREE.Vector3(x, y, z);
+  });
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({ color: color });
+  return new THREE.LineLoop(geometry, material);
+}
+
+async function geoJsonTo3DOutlineMesh(geoJson, radius = DEFAULT_RADIUS, color) {
+  if (!geoJson || !geoJson.features) {
+    console.error("Invalid GeoJSON data:", geoJson);
+    return [];
+  }
+
+  let lineMeshes = [];
+
+  for (const feature of geoJson.features) {
+    if (!feature.geometry || !feature.geometry.coordinates) {
+      console.error(`Feature does not have a valid geometry:`, feature);
+      continue;
+    }
+
+    const geometryType = feature.geometry.type;
+    let lines = [];
+
+    if (geometryType === "Polygon") {
+      lines = feature.geometry.coordinates;
+    } else if (geometryType === "MultiPolygon") {
+      // Correctly handle MultiPolygon by flattening only one level
+      feature.geometry.coordinates.forEach((poly) => {
+        lines.push(...poly);
+      });
+    } else {
+      console.error(`Unsupported geometry type for outlines: ${geometryType}`);
+      continue;
+    }
+
+    lines.forEach((lineCoords) => {
+      if (lineCoords.length > 0 && Array.isArray(lineCoords[0])) {
+        const outlineMesh = createOutlineMesh(lineCoords, radius, color);
+        lineMeshes.push(outlineMesh);
+      } else {
+        console.error("Invalid line coordinates:", lineCoords);
+      }
+    });
+  }
+
+  return lineMeshes;
+}
+
+async function generateCountryOutlines(geoJson, color) {
+  const outlines = await geoJsonTo3DOutlineMesh(geoJson, DEFAULT_RADIUS, color);
+  const combinedOutlines = combineMeshes(outlines);
+  return combinedOutlines;
+}
+
+export { polygonsToMesh, generateCountryOutlines };
