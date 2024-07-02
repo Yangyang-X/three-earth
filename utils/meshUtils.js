@@ -308,6 +308,69 @@ async function loadMeshDataFromFile(name) {
   });
 }
 
+async function geoJsonTo3DMeshUsingEarcut(geoJson, radius = DEFAULT_RADIUS) {
+  if (!geoJson || !geoJson.features) {
+    console.error("Invalid GeoJSON data:", geoJson);
+    return [];
+  }
+
+  let meshes = [];
+
+  // Process each feature in the GeoJSON
+  for (const feature of geoJson.features) {
+    if (!feature.geometry || !feature.geometry.coordinates) {
+      console.error(`Feature does not have a valid geometry:`, feature);
+      continue;
+    }
+
+    const geometryType = feature.geometry.type;
+    let polygons =
+      geometryType === "Polygon"
+        ? [feature.geometry.coordinates]
+        : geometryType === "MultiPolygon"
+        ? feature.geometry.coordinates
+        : null;
+
+    if (!polygons) {
+      console.error(`Unsupported geometry type: ${geometryType}`);
+      continue;
+    }
+
+    for (const polygonCoords of polygons) {
+      // Ensure each ring has at least four coordinates and closes properly
+      const rings = polygonCoords
+        .map((ring) => {
+          const ringClosed = ring[0].every(
+            (val, index) => val === ring[ring.length - 1][index]
+          )
+            ? ring
+            : [...ring, ring[0]];
+          return ringClosed.length >= 4 ? ringClosed : null;
+        })
+        .filter((ring) => ring !== null);
+
+      if (rings.length === 0) {
+        console.error(
+          "Invalid or too few coordinates to form a polygon:",
+          polygonCoords
+        );
+        continue;
+      }
+
+      const data = earcut.flatten(rings);
+      const { vertices, holes, dimensions } = data;
+      const indices = earcut(vertices, holes, dimensions);
+      const mesh = createMesh(vertices, indices, dimensions, radius);
+      meshes.push(mesh);
+    }
+  }
+  if (meshes.length > 1) {
+    return combineMeshes(meshes);
+  } else {
+    return meshes[0];
+  }
+}
+
 async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
   if (!geoJson || !geoJson.features) {
     console.error("Invalid GeoJSON data:", geoJson);
@@ -386,8 +449,8 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
       geometryType === "Polygon"
         ? [feature.geometry.coordinates]
         : geometryType === "MultiPolygon"
-          ? feature.geometry.coordinates
-          : null;
+        ? feature.geometry.coordinates
+        : null;
 
     if (!polygons) {
       console.error(`Unsupported geometry type: ${geometryType}`);
@@ -419,8 +482,8 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
       const area = turf.area(polygon) / 1000000; // Convert area to square kilometers
 
       // Check the area to determine processing method
-      const usingTurf = meshMethod === "turf" || area >= 200000;
-
+      const usingTurf = meshMethod === "turf" || area >= 200000; //todo reset me
+      // const usingTurf = false;
       if (!usingTurf) {
         const data = earcut.flatten(rings);
         const { vertices, holes, dimensions } = data;
@@ -460,55 +523,55 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
   }
 
   // Optionally save the computed meshes for large countries
-  if (
-    [
-      "IN",
-      "AR",
-      "KZ",
-      "DZ",
-      "CD",
-      "SA",
-      "MX",
-      "SD",
-      "LY",
-      "IR",
-      "MN",
-      "PE",
-      "TD", // existing 20 largest
-      "ET",
-      "CL",
-      "MA",
-      "AF",
-      "MM",
-      "ML",
-      "AO",
-      "NE",
-      "CO",
-      "ZA", // 20 additional large countries
-      "CG",
-      "MR",
-      "EG",
-      "TZ",
-      "NG",
-      "VE",
-      "PK",
-      "NA",
-      "MZ",
-      "TR", // 20 additional large countries
-    ].includes(name.toUpperCase())
-  ) {
-    const combinedMesh = combineMeshes(meshes);
-    exportMeshToGLB(combinedMesh)
-      .then((glbBlob) => {
-        saveMeshDataAsBinary(name, glbBlob); // Save the GLB blob to IndexedDB
-        setTimeout(() => {
-          downloadFromIDB(name);
-        }, 500);
-      })
-      .catch((error) => {
-        console.error("Failed to save mesh data as GLB:", error);
-      });
-  }
+  // if (
+  //   [
+  //     "IN",
+  //     "AR",
+  //     "KZ",
+  //     "DZ",
+  //     "CD",
+  //     "SA",
+  //     "MX",
+  //     "SD",
+  //     "LY",
+  //     "IR",
+  //     "MN",
+  //     "PE",
+  //     "TD", // existing 20 largest
+  //     "ET",
+  //     "CL",
+  //     "MA",
+  //     "AF",
+  //     "MM",
+  //     "ML",
+  //     "AO",
+  //     "NE",
+  //     "CO",
+  //     "ZA", // 20 additional large countries
+  //     "CG",
+  //     "MR",
+  //     "EG",
+  //     "TZ",
+  //     "NG",
+  //     "VE",
+  //     "PK",
+  //     "NA",
+  //     "MZ",
+  //     "TR", // 20 additional large countries
+  //   ].includes(name.toUpperCase())
+  // ) {
+  //   const combinedMesh = combineMeshes(meshes);
+  //   exportMeshToGLB(combinedMesh)
+  //     .then((glbBlob) => {
+  //       saveMeshDataAsBinary(name, glbBlob); // Save the GLB blob to IndexedDB
+  //       setTimeout(() => {
+  //         downloadFromIDB(name);
+  //       }, 500);
+  //     })
+  //     .catch((error) => {
+  //       console.error("Failed to save mesh data as GLB:", error);
+  //     });
+  // }
   return meshes;
 }
 
@@ -702,18 +765,15 @@ async function polygonsToMesh(
   style = "mesh",
   elevation = 1.0
 ) {
-  let polygonMeshes = [];
 
-  // Check if the meshes are already stored and reuse them if possible
   if (style === "mesh") {
-    polygonMeshes = await geoJsonTo3DMesh(geoJson, radius * elevation);
+    return await geoJsonTo3DMesh(geoJson, radius * elevation);
+    // return await geoJsonTo3DMeshUsingEarcut(geoJson, radius * elevation);
   } else if (style === "lines") {
-    polygonMeshes = geoJsonTo3DLines(geoJson, radius * elevation);
+    return geoJsonTo3DLines(geoJson, radius * elevation);
   } else if (style === "pin") {
-    polygonMeshes = geoJsonToSingle3DPin(geoJson, radius * elevation);
+    return geoJsonToSingle3DPin(geoJson, radius * elevation);
   }
-
-  return polygonMeshes;
 }
 
 function createOutlineMesh(vertices, radius, color) {

@@ -3,6 +3,8 @@
         "bbox",
         "earcut",
         "Jsons",
-        "Resizer"
+        "Raycaster",
+        "Resizer",
+        "unhighlight"
     ]
 }

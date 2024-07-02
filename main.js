@@ -17,9 +17,9 @@ const MAX_EARTH_RADIUS = 100;
 
 let controls;
 let resizer;
-var previousGeometries = [];
 
-var precomputedMeshes = {};
+let boundingBoxes = {};
+
 
 class World {
   constructor(container) {
@@ -44,6 +44,14 @@ class World {
     resizer = new Resizer(container, this.camera, this.renderer);
 
     this.previousTargetLatLng = { lat: 0, lng: -90 };
+
+    window.addEventListener('mousedown', this.onPointerDown.bind(this), false);
+    window.addEventListener('touchstart', this.onPointerDown.bind(this), false);
+
+    this.previousGeometries = [];
+    this.meshDict = {}; // Dictionary to store country meshes
+    this.sphereDict = {}; // Dictionary to store bounding spheres
+    this.currentlyHighlighted = null; // Store the currently highlighted country mesh
   }
 
   start() {
@@ -65,13 +73,33 @@ class World {
     );
   }
 
-
-
-
+  positionToLatLng(vector) {
+    const phi = Math.acos(vector.y / this.earthRadius);
+    const theta = Math.atan2(vector.z, vector.x);
+  
+    const lat = 90 - (phi * (180 / Math.PI));
+    const lng = ((theta * (180 / Math.PI)) + 180) % 360 - 180;
+  
+    console.log(`Vector: ${vector.toArray()}, Latitude: ${lat}, Longitude: ${lng}`);
+    return { lat, lng };
+  }
+  
+  getGlobeCenterLatLng() {
+    const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(this.earth.quaternion);
+    const adjustedDirection = direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(90));
+    const latLng = this.positionToLatLng(adjustedDirection);
+  
+    console.log(`Globe center direction: ${direction.toArray()}, Adjusted direction: ${adjustedDirection.toArray()}, LatLng: ${latLng.lat}, ${latLng.lng}`);
+    return latLng;
+  }
+  
+  
 
   rotateGlobeTo(targetLatLng, onComplete) {
-    const initialLatLng = this.previousTargetLatLng;
+    // Current globe center point in lat/lng
+    const currentLatLng = this.getGlobeCenterLatLng();
 
+    const initialLatLng = currentLatLng || this.previousTargetLatLng;
     // Normalize the longitude difference for the shortest path
     const normalizeAngle = (angle) => {
       return ((angle + 180) % 360) - 180;
@@ -130,14 +158,14 @@ class World {
   }
 
   removePreviousGeometries() {
-    if (previousGeometries.length > 0) {
-      previousGeometries.forEach((geometryId) => {
+    if (this.previousGeometries.length > 0) {
+      this.previousGeometries.forEach((geometryId) => {
         const geometry = this.earth.getObjectByProperty("uuid", geometryId);
         if (geometry) {
           this.earth.remove(geometry);
         }
       });
-      previousGeometries.length = 0;
+      this.previousGeometries.length = 0;
     }
   }
 
@@ -147,7 +175,7 @@ class World {
       return;
     }
 
-    this.removePreviousGeometries(this.earth);
+    this.removePreviousGeometries();
 
     // Start loading meshes asynchronously
     geoJson.name = name;
@@ -167,24 +195,253 @@ class World {
         //   geometry.material.color.set(0x00ff00); //! Sets the color to red
         // }
         this.earth.add(geometry);
-        previousGeometries.push(geometry.uuid);
+        this.previousGeometries.push(geometry.uuid);
       });
     });
-  }
-
-  async prepareBigCountryMeshes(geoJsons) {
-    for (let i = 0; i < geoJsons.length; i++) {
-      const geoJson = geoJsons[i];
-      const name = geoJson.name;
-      const mesh = await polygonsToMesh(geoJson);
-      precomputedMeshes[name] = mesh;
-    }
   }
 
   async drawCountryOutlines(geojson, color) {
     const mesh = await generateCountryOutlines(geojson, color);
     this.earth.add(mesh);
   }
+
+  async prepareCountryMeshes(geoJsons) {
+    for (let i = 0; i < geoJsons.length; i++) {
+      const geoJson = geoJsons[i];
+      const meshes = await polygonsToMesh(geoJson);
+
+      meshes.forEach((mesh) => {
+        if (mesh instanceof THREE.Mesh) {
+          // Validate the geometry's position attribute
+          const position = mesh.geometry.attributes.position;
+          let valid = true;
+
+          for (let j = 0; j < position.count; j++) {
+            const x = position.getX(j);
+            const y = position.getY(j);
+            const z = position.getZ(j);
+
+            if (isNaN(x) || isNaN(y) || isNaN(z)) {
+              console.error(`Invalid vertex at index ${j}:`, { x, y, z });
+              valid = false;
+              break;
+            }
+          }
+
+          if (!valid) {
+            console.error('Mesh contains invalid vertices and will be skipped:', mesh);
+            return; // Skip this mesh if invalid vertices are found
+          }
+
+          mesh.userData.isShapeMesh = true;
+          mesh.userData.name = geoJson.name;
+
+          // Store mesh in dictionary
+          this.meshDict[geoJson.name] = mesh;
+
+          // Create a bounding box
+          const boundingBox = new THREE.Box3().setFromObject(mesh);
+          const boxSize = boundingBox.getSize(new THREE.Vector3());
+          const boxCenter = boundingBox.getCenter(new THREE.Vector3());
+
+          const boxGeometry = new THREE.BoxGeometry(boxSize.x, boxSize.y, boxSize.z);
+          const boxMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0 });
+          const boundingBoxMesh = new THREE.Mesh(boxGeometry, boxMaterial);
+          boundingBoxMesh.position.copy(boxCenter);
+          boundingBoxMesh.userData.name = geoJson.name;
+          boundingBoxMesh.userData.isBoundingBox = true;
+
+          // Store bounding box in dictionary
+          this.sphereDict[geoJson.name] = boundingBoxMesh;
+
+          // Add the bounding box to the earth
+          this.earth.add(boundingBoxMesh);
+        } else {
+          console.error('Invalid mesh object:', mesh);
+        }
+      });
+    }
+  }
+
+
+  async prepareBoundingBoxes(geoJsons) {
+    for (let i = 0; i < geoJsons.length; i++) {
+      const geoJson = geoJsons[i];
+      const mesh = await polygonsToMesh(geoJson);
+
+      if (mesh instanceof THREE.Mesh) {
+        const boundingBox = new THREE.Box3().setFromObject(mesh);
+        const boxSize = boundingBox.getSize(new THREE.Vector3());
+        const boxCenter = boundingBox.getCenter(new THREE.Vector3());
+
+        boundingBoxes[geoJson.name] = {
+          size: boxSize.toArray(),
+          center: boxCenter.toArray()
+        };
+      }
+    }
+
+    this.saveBoundingBoxesToFile(boundingBoxes);
+  }
+
+  saveBoundingBoxesToFile(boundingBoxes) {
+    const jsonContent = JSON.stringify(boundingBoxes, null, 2);
+
+    if (typeof window === 'undefined') {
+      const fs = require('fs');
+      fs.writeFile('boundingBoxes.json', jsonContent, 'utf8', (err) => {
+        if (err) {
+          console.error('An error occurred while writing the bounding boxes to file:', err);
+        } else {
+          console.log('Bounding boxes have been successfully saved to boundingBoxes.json');
+        }
+      });
+    } else {
+      const a = document.createElement('a');
+      const file = new Blob([jsonContent], { type: 'application/json' });
+      a.href = URL.createObjectURL(file);
+      a.download = 'boundingBoxes.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  }
+
+  async loadBoundingBoxes() {
+    let boundingBoxes;
+    console.log('Starting to load bounding boxes.');
+
+    if (typeof window === 'undefined') {
+      // Node.js environment
+      const fs = require('fs').promises;
+      try {
+        console.log('Running in Node.js environment. Reading bounding boxes file from /data/boundingboxes.json');
+        const data = await fs.readFile('/data/boundingboxes.json', 'utf8');
+        boundingBoxes = JSON.parse(data);
+      } catch (err) {
+        console.error('An error occurred while reading the bounding boxes file:', err);
+        return;
+      }
+    } else {
+      // Browser environment
+      try {
+        console.log('Running in browser environment. Fetching bounding boxes file from /data/boundingboxes.json');
+        const response = await fetch('/data/boundingboxes.json');
+        boundingBoxes = await response.json();
+      } catch (err) {
+        console.error('An error occurred while fetching the bounding boxes file:', err);
+        return;
+      }
+    }
+
+    for (const name in boundingBoxes) {
+      const { size, center } = boundingBoxes[name];
+
+      const boxGeometry = new THREE.BoxGeometry(size[0], size[1], size[2]);
+      const boxMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0 });
+      const boundingBoxMesh = new THREE.Mesh(boxGeometry, boxMaterial);
+      boundingBoxMesh.position.set(center[0], center[1], center[2]);
+      boundingBoxMesh.userData.name = name;
+      boundingBoxMesh.userData.isBoundingBox = true;
+
+      // Add the bounding box to the earth
+      this.earth.add(boundingBoxMesh);
+    }
+
+    console.log('Finished loading and processing bounding boxes.');
+  }
+
+
+
+  onPointerDown(event) {
+    console.log("onPointerDown event triggered");
+    event.preventDefault();
+
+    // Calculate mouse position in normalized device coordinates (-1 to +1) for both components
+    const mouse = new THREE.Vector2(
+      (event.clientX / window.innerWidth) * 2 - 1,
+      -(event.clientY / window.innerHeight) * 2 + 1
+    );
+    console.log(`Mouse coordinates: x=${mouse.x}, y=${mouse.y}`);
+
+    // Create a raycaster and set it from the camera and mouse position
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(mouse, this.camera);
+    raycaster.params.Line.threshold = 0.1;
+
+    // Check for intersections with objects in the scene
+    const intersects = raycaster.intersectObjects(this.earth.children, true);
+    console.log(`Intersections found: ${intersects.length}, ${intersects}}`);
+
+    intersects.sort((a, b) => {
+      const aBox = new THREE.Box3().setFromObject(a.object);
+      const bBox = new THREE.Box3().setFromObject(b.object);
+      return aBox.getSize(new THREE.Vector3()).length() - bBox.getSize(new THREE.Vector3()).length();
+    });
+  
+    // Find the intersected object that is a bounding box
+    const boxIntersect = intersects.find(intersect => intersect.object.userData.isBoundingBox);
+  
+    if (boxIntersect) {
+      const countryName = boxIntersect.object.userData.name;
+      console.log(`Click on country box: ${countryName}`);
+      this.highlightCountry(countryName);
+    } else {
+      console.log("No intersect with bounding boxes");
+    }
+  }
+
+
+  async highlightCountry(countryName) {
+    this.removePreviousGeometries()
+
+    const countryGeoJsonPath = `/country/${countryName}.json`;
+    let geoJson;
+
+    try {
+      if (typeof window === 'undefined') {
+        // Node.js environment
+        const fs = require('fs').promises;
+        const data = await fs.readFile(countryGeoJsonPath, 'utf8');
+        geoJson = JSON.parse(data);
+      } else {
+        // Browser environment
+        const response = await fetch(countryGeoJsonPath);
+        geoJson = await response.json();
+      }
+    } catch (err) {
+      console.error(`An error occurred while loading the GeoJSON file for ${countryName}:`, err);
+      return;
+    }
+
+    if (!geoJson) {
+      console.error("No GeoJSON data found");
+      return;
+    }
+
+    geoJson.name = countryName;
+    const meshPromise = polygonsToMesh(geoJson, MAX_EARTH_RADIUS, "mesh", 1.0);
+
+    const firstFeature = geoJson.features[0];
+    const centroid = calculatePolygonCentroid(firstFeature.geometry);
+    const targetLatLng = { lat: centroid.lat, lng: centroid.lng };
+
+    // Rotate the globe immediately
+    this.rotateGlobeTo(targetLatLng, async () => {
+      // Wait for the mesh data to be ready
+      const meshes = await meshPromise;
+      meshes.forEach((geometry) => {
+        geometry.material.color.setHex(0xff0000); // Make the mesh red
+        geometry.visible = true; // Ensure the mesh is set to be visible
+        this.earth.add(geometry);
+        this.previousGeometries.push(geometry.uuid);
+      });
+
+      console.log(`Country ${countryName} highlighted successfully.`);
+    });
+  }
+
+
 }
 
 export { World };
