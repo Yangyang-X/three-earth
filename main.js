@@ -120,7 +120,8 @@ class World {
     const latLng = this.positionToLatLng(adjustedDirection);
 
     console.log(
-      `Globe center direction: ${direction.toArray()}, Adjusted direction: ${adjustedDirection.toArray()}, LatLng: ${latLng.lat
+      `Globe center direction: ${direction.toArray()}, Adjusted direction: ${adjustedDirection.toArray()}, LatLng: ${
+        latLng.lat
       }, ${latLng.lng}`
     );
     return latLng;
@@ -268,10 +269,7 @@ class World {
       // Node.js environment
       const fs = require("fs").promises;
       try {
-        console.log(
-          "Running in Node.js environment. Reading bounding boxes file from /boundingboxes.json"
-        );
-        const data = await fs.readFile("/boundingboxes.json", "utf8");
+        const data = await fs.readFile("/boundingBoxes.json", "utf8");
         boundingBoxes = JSON.parse(data);
       } catch (err) {
         console.error(
@@ -283,10 +281,7 @@ class World {
     } else {
       // Browser environment
       try {
-        console.log(
-          "Running in browser environment. Fetching bounding boxes file from /boundingboxes.json"
-        );
-        const response = await fetch("/boundingboxes.json");
+        const response = await fetch("/boundingBoxes.json");
         boundingBoxes = await response.json();
       } catch (err) {
         console.error(
@@ -320,7 +315,7 @@ class World {
 
   onPointerDown(event) {
     console.log("onPointerDown event triggered");
-    event.preventDefault();
+    // event.preventDefault();
 
     // Calculate mouse position in normalized device coordinates (-1 to +1) for both components
     const mouse = new THREE.Vector2(
