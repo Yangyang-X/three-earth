@@ -67,7 +67,7 @@ class World {
     try {
       const response = await fetch("./countryCenter.json");
       this.countryCenters = await response.json();
-      console.log("Country centers loaded successfully.");
+      console.log("Country centers loaded.");
     } catch (err) {
       console.error("Error loading country centers:", err);
     }
@@ -263,7 +263,6 @@ class World {
 
   async loadBoundingBoxes() {
     let boundingBoxes;
-    console.log("Starting to load bounding boxes.");
 
     if (typeof window === "undefined") {
       // Node.js environment
@@ -314,7 +313,7 @@ class World {
   }
 
   onPointerDown(event) {
-    console.log("onPointerDown event triggered");
+    // console.log("onPointerDown event triggered");
     // event.preventDefault();
 
     // Calculate mouse position in normalized device coordinates (-1 to +1) for both components
@@ -322,7 +321,7 @@ class World {
       (event.clientX / window.innerWidth) * 2 - 1,
       -(event.clientY / window.innerHeight) * 2 + 1
     );
-    console.log(`Mouse coordinates: x=${mouse.x}, y=${mouse.y}`);
+    // console.log(`Mouse coordinates: x=${mouse.x}, y=${mouse.y}`);
 
     // Create a raycaster and set it from the camera and mouse position
     const raycaster = new THREE.Raycaster();
@@ -331,7 +330,7 @@ class World {
 
     // Check for intersections with objects in the scene
     const intersects = raycaster.intersectObjects(this.earth.children, true);
-    console.log(`Intersections found: ${intersects.length}, ${intersects}}`);
+    // console.log(`Intersections found: ${intersects.length}, ${intersects}}`);
 
     intersects.sort((a, b) => {
       const aBox = new THREE.Box3().setFromObject(a.object);
@@ -349,7 +348,7 @@ class World {
 
     if (boxIntersect) {
       const countryName = boxIntersect.object.userData.name;
-      console.log(`Click on country box: ${countryName}`);
+      // console.log(`Click on country box: ${countryName}`);
       this.highlightCountry(countryName);
     } else {
       console.log("No intersect with bounding boxes");
@@ -533,13 +532,13 @@ class World {
 
     try {
       if (meshCountries.includes(countryName)) {
-        console.log(`Loading GLB mesh for country: ${countryName}`);
+        // console.log(`Loading GLB mesh for country: ${countryName}`);
         meshPromise = loadGlbMesh(countryName, this.getEarthRadius());
       } else {
         const countryGeoJsonPath = `/country/${countryName}.json`;
-        console.log(
-          `Fetching GeoJSON for country: ${countryName} from ${countryGeoJsonPath}`
-        );
+        // console.log(
+        //   `Fetching GeoJSON for country: ${countryName} from ${countryGeoJsonPath}`
+        // );
 
         const response = await fetch(countryGeoJsonPath);
         const geoJson = await response.json();
@@ -550,7 +549,7 @@ class World {
         }
 
         geoJson.name = countryName;
-        console.log(`Generating mesh from GeoJSON for country: ${countryName}`);
+        // console.log(`Generating mesh from GeoJSON for country: ${countryName}`);
         meshPromise = polygonsToMesh(geoJson, style, this.getEarthRadius());
       }
 
@@ -576,7 +575,7 @@ class World {
           this.previousGeometries.push(meshes.uuid);
         }
 
-        console.log(`Country ${countryName} highlighted successfully.`);
+        // console.log(`Country ${countryName} highlighted successfully.`);
       });
     } catch (err) {
       console.error(
