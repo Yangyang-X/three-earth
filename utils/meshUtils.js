@@ -101,12 +101,6 @@ async function loadMeshData(key) {
     );
     console.log(`${new Date().toISOString()}: Meshes loaded for ${key}`);
 
-    // Calculate the size of the data in kilobytes
-    // const jsonData = JSON.stringify(result.value);
-    // const sizeInBytes = new Blob([jsonData]).size;
-    // const sizeInKilobytes = sizeInBytes / 1024;
-    // console.log(`Data size: ${sizeInKilobytes.toFixed(2)} KB`);
-
     return meshes;
   } else {
     console.error(
@@ -178,7 +172,6 @@ async function exportMeshToGLB(mesh) {
             });
             // console.log("Export successful, JSON converted to GLB.");
           }
-          // console.log("GLB size:", (blob.size / 1024).toFixed(2), "KB");
           resolve(blob);
         } catch (error) {
           console.error("Export failed:", error);
@@ -285,12 +278,11 @@ async function downloadFromIDB(key) {
 async function loadMeshDataFromFile(name) {
   return new Promise((resolve, reject) => {
     const loader = new GLTFLoader();
-    const path = `./data/${name}.glb`; // Adjust the path as necessary
+    const path = `./glb/${name}.glb`; // Adjust the path as necessary
 
     loader.load(
       path,
       (gltf) => {
-        console.log("Mesh data loaded from file:", name);
         const meshes = [];
         gltf.scene.traverse((child) => {
           if (child.isMesh) {
@@ -328,8 +320,8 @@ async function geoJsonTo3DMeshUsingEarcut(geoJson, radius = DEFAULT_RADIUS) {
       geometryType === "Polygon"
         ? [feature.geometry.coordinates]
         : geometryType === "MultiPolygon"
-        ? feature.geometry.coordinates
-        : null;
+          ? feature.geometry.coordinates
+          : null;
 
     if (!polygons) {
       console.error(`Unsupported geometry type: ${geometryType}`);
@@ -371,7 +363,11 @@ async function geoJsonTo3DMeshUsingEarcut(geoJson, radius = DEFAULT_RADIUS) {
   }
 }
 
-async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
+async function geoJsonTo3DMesh(
+  geoJson,
+  radius = DEFAULT_RADIUS,
+  saveGlb = true //todo set to false later
+) {
   if (!geoJson || !geoJson.features) {
     console.error("Invalid GeoJSON data:", geoJson);
     return [];
@@ -381,61 +377,6 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
   const meshMethod = geoJson.meshMethod;
 
   let meshes = [];
-  const glbCountries = [
-    "in",
-    "ar",
-    "kz",
-    "dz",
-    "cd",
-    "sa",
-    "mx",
-    "sd",
-    "ly",
-    "ir",
-    "mn",
-    "pe",
-    "td",
-    "et",
-    "cl",
-    "ma",
-    "af",
-    "mm",
-    "ml",
-    "ao",
-    "ne",
-    "co",
-    "za",
-    "cg",
-    "mr",
-    "eg",
-    "tz",
-    "ng",
-    "ve",
-    "pk",
-    "na",
-    "mz",
-    "tr",
-    "us",
-    "ca",
-    "ru",
-    "cn",
-    "au",
-    "br",
-    "fr",
-    "id",
-  ];
-
-  // Attempt to load precomputed meshes from the database
-  if (glbCountries.includes(name)) {
-    try {
-      const meshes = await loadMeshDataFromFile(name);
-      if (meshes) {
-        return meshes; // Directly use the meshes loaded from the database
-      }
-    } catch (error) {
-      console.error("Failed to load mesh data from database:", error);
-    }
-  }
 
   // Process each feature in the GeoJSON
   for (const feature of geoJson.features) {
@@ -449,8 +390,8 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
       geometryType === "Polygon"
         ? [feature.geometry.coordinates]
         : geometryType === "MultiPolygon"
-        ? feature.geometry.coordinates
-        : null;
+          ? feature.geometry.coordinates
+          : null;
 
     if (!polygons) {
       console.error(`Unsupported geometry type: ${geometryType}`);
@@ -482,8 +423,8 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
       const area = turf.area(polygon) / 1000000; // Convert area to square kilometers
 
       // Check the area to determine processing method
-      const usingTurf = meshMethod === "turf" || area >= 200000; //todo reset me
-      // const usingTurf = false;
+      // const usingTurf = meshMethod === "turf" || area >= 200000; //todo reset
+      const usingTurf = true
       if (!usingTurf) {
         const data = earcut.flatten(rings);
         const { vertices, holes, dimensions } = data;
@@ -523,55 +464,20 @@ async function geoJsonTo3DMesh(geoJson, radius = DEFAULT_RADIUS) {
   }
 
   // Optionally save the computed meshes for large countries
-  // if (
-  //   [
-  //     "IN",
-  //     "AR",
-  //     "KZ",
-  //     "DZ",
-  //     "CD",
-  //     "SA",
-  //     "MX",
-  //     "SD",
-  //     "LY",
-  //     "IR",
-  //     "MN",
-  //     "PE",
-  //     "TD", // existing 20 largest
-  //     "ET",
-  //     "CL",
-  //     "MA",
-  //     "AF",
-  //     "MM",
-  //     "ML",
-  //     "AO",
-  //     "NE",
-  //     "CO",
-  //     "ZA", // 20 additional large countries
-  //     "CG",
-  //     "MR",
-  //     "EG",
-  //     "TZ",
-  //     "NG",
-  //     "VE",
-  //     "PK",
-  //     "NA",
-  //     "MZ",
-  //     "TR", // 20 additional large countries
-  //   ].includes(name.toUpperCase())
-  // ) {
-  //   const combinedMesh = combineMeshes(meshes);
-  //   exportMeshToGLB(combinedMesh)
-  //     .then((glbBlob) => {
-  //       saveMeshDataAsBinary(name, glbBlob); // Save the GLB blob to IndexedDB
-  //       setTimeout(() => {
-  //         downloadFromIDB(name);
-  //       }, 500);
-  //     })
-  //     .catch((error) => {
-  //       console.error("Failed to save mesh data as GLB:", error);
-  //     });
-  // }
+  if (saveGlb) {
+    const combinedMesh = meshes.length == 1 ? meshes[0] : combineMeshes(meshes);
+    await exportMeshToGLB(combinedMesh)
+      .then((glbBlob) => {
+        saveMeshDataAsBinary(name, glbBlob); // Save the GLB blob to IndexedDB
+        setTimeout(() => {
+          downloadFromIDB(name);
+        }, 500);
+      })
+      .catch((error) => {
+        console.error("Failed to save mesh data as GLB:", error);
+      });
+  }
+
   return meshes;
 }
 
@@ -750,29 +656,19 @@ function createClassicPin(color) {
   return pinGroup;
 }
 
-// Function to adjust the scale of existing meshes
-function adjustMeshScale(meshes, newRadius, oldRadius) {
-  const scaleRatio = newRadius / oldRadius;
-  meshes.forEach((mesh) => {
-    mesh.scale.set(scaleRatio, scaleRatio, scaleRatio);
-  });
-}
-
 // Function to highlight a region with different styles
 async function polygonsToMesh(
   geoJson,
-  radius = DEFAULT_RADIUS,
   style = "mesh",
-  elevation = 1.0
+  radius = DEFAULT_RADIUS
 ) {
-
   if (style === "mesh") {
-    return await geoJsonTo3DMesh(geoJson, radius * elevation);
+    return await geoJsonTo3DMesh(geoJson, radius);
     // return await geoJsonTo3DMeshUsingEarcut(geoJson, radius * elevation);
-  } else if (style === "lines") {
-    return geoJsonTo3DLines(geoJson, radius * elevation);
   } else if (style === "pin") {
-    return geoJsonToSingle3DPin(geoJson, radius * elevation);
+    return geoJsonToSingle3DPin(geoJson, radius);
+  } else if (style === "lines") {
+    return geoJsonTo3DLines(geoJson, radius);
   }
 }
 
@@ -828,10 +724,30 @@ async function geoJsonTo3DOutlineMesh(geoJson, radius = DEFAULT_RADIUS, color) {
   return lineMeshes;
 }
 
+async function loadGlbMesh(countryName, radius = DEFAULT_RADIUS) {
+  try {
+    const meshes = await loadMeshDataFromFile(countryName);
+    if (meshes && Array.isArray(meshes)) {
+      meshes.forEach(mesh => {
+        if (mesh.scale && typeof mesh.scale.set === 'function') {
+          mesh.scale.set(radius / DEFAULT_RADIUS, radius / DEFAULT_RADIUS, radius / DEFAULT_RADIUS);
+        } else {
+          console.error(`Mesh for country ${countryName} does not have a valid scale property.`);
+        }
+      });
+      return meshes;
+    } else {
+      console.error(`No valid mesh list returned for country ${countryName}.`);
+    }
+  } catch (error) {
+    console.error(`Failed to load mesh data for country ${countryName} from database:`, error);
+  }
+}
+
 async function generateCountryOutlines(geoJson, color) {
   const outlines = await geoJsonTo3DOutlineMesh(geoJson, DEFAULT_RADIUS, color);
   const combinedOutlines = combineMeshes(outlines);
   return combinedOutlines;
 }
 
-export { polygonsToMesh, generateCountryOutlines };
+export { loadGlbMesh, polygonsToMesh, generateCountryOutlines };
