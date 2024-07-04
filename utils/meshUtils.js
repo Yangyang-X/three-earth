@@ -356,17 +356,14 @@ async function geoJsonTo3DMeshUsingEarcut(geoJson, radius = DEFAULT_RADIUS) {
       meshes.push(mesh);
     }
   }
-  if (meshes.length > 1) {
-    return combineMeshes(meshes);
-  } else {
-    return meshes[0];
-  }
+  return meshes;
 }
 
 async function geoJsonTo3DMesh(
   geoJson,
   radius = DEFAULT_RADIUS,
-  saveGlb = true //todo set to false later
+  merge = true,
+  saveGlb = false
 ) {
   if (!geoJson || !geoJson.features) {
     console.error("Invalid GeoJSON data:", geoJson);
@@ -423,8 +420,8 @@ async function geoJsonTo3DMesh(
       const area = turf.area(polygon) / 1000000; // Convert area to square kilometers
 
       // Check the area to determine processing method
-      // const usingTurf = meshMethod === "turf" || area >= 200000; //todo reset
-      const usingTurf = true
+      const usingTurf = meshMethod === "turf" || area >= 200000;
+
       if (!usingTurf) {
         const data = earcut.flatten(rings);
         const { vertices, holes, dimensions } = data;
@@ -660,11 +657,12 @@ function createClassicPin(color) {
 async function polygonsToMesh(
   geoJson,
   style = "mesh",
+  merge = true,
   radius = DEFAULT_RADIUS
 ) {
   if (style === "mesh") {
-    return await geoJsonTo3DMesh(geoJson, radius);
-    // return await geoJsonTo3DMeshUsingEarcut(geoJson, radius * elevation);
+    return await geoJsonTo3DMesh(geoJson, radius, merge);
+    // return await geoJsonTo3DMeshUsingEarcut(geoJson, radius);
   } else if (style === "pin") {
     return geoJsonToSingle3DPin(geoJson, radius);
   } else if (style === "lines") {
